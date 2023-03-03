@@ -10,6 +10,8 @@ from model import AutoEncoder
 import torch
 from torch.autograd import Variable
 
+from tqdm import tqdm
+
 if torch.cuda.is_available():
     import torch.cuda as T
 else:
@@ -17,7 +19,7 @@ else:
 
 
 parser = ArgumentParser(description="SAE-NAD")
-parser.add_argument('-e', '--epoch', type=int, default=60, help='number of epochs for GAT')
+parser.add_argument('-e', '--epoch', type=int, default=20, help='number of epochs for GAT')  # 60
 parser.add_argument('-b', '--batch_size', type=int, default=256, help='batch size for training')
 parser.add_argument('--alpha', type=float, default=2.0, help='the parameter of the weighting function')
 parser.add_argument('--epsilon', type=float, default=1e-5, help='the parameter of the weighting function')
@@ -26,7 +28,8 @@ parser.add_argument('-wd', '--weight_decay', type=float, default=1e-3, help='wei
 parser.add_argument('-att', '--num_attention', type=int, default=20, help='the number of dimension of attention')
 parser.add_argument('--inner_layers', nargs='+', type=int, default=[200, 50, 200], help='the number of latent factors')
 parser.add_argument('-dr', '--dropout_rate', type=float, default=0.5, help='the dropout probability')
-parser.add_argument('-seed', type=int, default=0, help='random state to split the data')
+parser.add_argument('-seed', type=int, default=1, help='random state to split the data')
+parser.add_argument('--gpu', type=int, default=1, help='Idx for the gpu to use')
 args = parser.parse_args()
 
 
@@ -45,19 +48,23 @@ def log_surplus_confidence_matrix(B, alpha, epsilon):
     return S
 
 
-def train_autoencoder(train_matrix, test_set):
+def train_autoencoder(train_matrix, test_set, dataset_name='gowalla'):
     num_users, num_items = train_matrix.shape
     weight_matrix = log_surplus_confidence_matrix(train_matrix, alpha=args.alpha, epsilon=args.epsilon)
     train_matrix[train_matrix > 0] = 1.0
-    place_correlation = scipy.sparse.load_npz('./data/Foursquare/place_correlation_gamma60.npz')
+    # place_correlation = scipy.sparse.load_npz('./data/Foursquare/place_correlation_gamma60.npz')
+    place_correlation = scipy.sparse.load_npz(f'./data/{dataset_name}/place_correlation_gamma60.npz')
 
-    assert num_items == place_correlation.shape[0]
+    # assert num_items == place_correlation.shape[0]
     print(train_matrix.shape)
 
     # Construct the model by instantiating the class defined in model.py
-    model = AutoEncoder(num_items, args.inner_layers, num_items, da=args.num_attention, dropout_rate=args.dropout_rate)
+    device_string = 'cuda:{}'.format(args.gpu) if torch.cuda.is_available() else 'cpu'
+    device = torch.device(device_string)
+    T.set_device(device)
+    model = AutoEncoder(num_items, args.inner_layers, num_items, da=args.num_attention, dropout_rate=args.dropout_rate, device=device)
     if torch.cuda.is_available():
-        model.cuda()
+        model.to(device)
 
     criterion = torch.nn.MSELoss(size_average=False, reduce=False)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
@@ -106,7 +113,7 @@ def train_autoencoder(train_matrix, test_set):
     model.eval()
     topk = 20
     recommended_list = []
-    for user_id in range(num_users):
+    for user_id in tqdm(range(num_users), desc='inference '):
         user_rating_vector = train_matrix.getrow(user_id).toarray()
         pred_rating_vector = model([train_matrix.getrow(user_id).indices], place_correlation)
         pred_rating_vector = pred_rating_vector.cpu().data.numpy()
@@ -121,28 +128,32 @@ def train_autoencoder(train_matrix, test_set):
         sorted_item = heapq.nlargest(topk, item_recommended_dict, key=item_recommended_dict.get)
         recommended_list.append(sorted_item)
 
-        print(test_set[user_id], sorted_item[:topk])
-        print(pred_rating_vector[sorted_item[0]], pred_rating_vector[sorted_item[1]],
-              pred_rating_vector[sorted_item[2]], pred_rating_vector[sorted_item[3]],
-              pred_rating_vector[sorted_item[4]])
-        print("user:%d, precision@5:%f, precision@10:%f" % (
-            user_id, eval_metrics.precision_at_k_per_sample(test_set[user_id], sorted_item[:5], 5),
-            eval_metrics.precision_at_k_per_sample(test_set[user_id], sorted_item[:topk], topk)))
+        # print(test_set[user_id], sorted_item[:topk])
+        # print(pred_rating_vector[sorted_item[0]], pred_rating_vector[sorted_item[1]],
+        #       pred_rating_vector[sorted_item[2]], pred_rating_vector[sorted_item[3]],
+        #       pred_rating_vector[sorted_item[4]])
+        # print("user:%d, precision@5:%f, precision@10:%f" % (
+        #     user_id, eval_metrics.precision_at_k_per_sample(test_set[user_id], sorted_item[:5], 5),
+        #     eval_metrics.precision_at_k_per_sample(test_set[user_id], sorted_item[:topk], topk)))
 
-    precision, recall, MAP = [], [], []
-    for k in [5, 10, 15, 20]:
-        precision.append(eval_metrics.precision_at_k(test_set, recommended_list, k))
+    precision, recall, ndcg, MAP = [], [], [], []
+    for k in [10, 20]:
+        # precision.append(eval_metrics.precision_at_k(test_set, recommended_list, k))
         recall.append(eval_metrics.recall_at_k(test_set, recommended_list, k))
-        MAP.append(eval_metrics.mapk(test_set, recommended_list, k))
+        ndcg.append(eval_metrics.ndcg_k(test_set, recommended_list, k))
+        # MAP.append(eval_metrics.mapk(test_set, recommended_list, k))
 
-    print(precision)
+    # print(precision)
     print(recall)
-    print(MAP)
+    print(ndcg)
+    # print(MAP)
 
 
 def main():
-    train_matrix, test_set, place_coords = dataset.Foursquare().generate_data(args.seed)
-    train_autoencoder(train_matrix, test_set)
+    # train_matrix, test_set, place_coords = dataset.Foursquare().generate_data(args.seed)
+    dataset_name = 'meituan_big' # meituan_big # gowalla
+    train_matrix, test_set, place_coords = dataset.Gowalla(dataset_name).generate_data(args.seed)
+    train_autoencoder(train_matrix, test_set, dataset_name=dataset_name)  # gowalla
 
 
 if __name__ == '__main__':

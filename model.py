@@ -10,7 +10,7 @@ else:
 
 
 class AutoEncoder(torch.nn.Module):
-    def __init__(self, D_in, H, D_out, da=20, dropout_rate=0.5):
+    def __init__(self, D_in, H, D_out, da=20, dropout_rate=0.5, device='cpu'):
         """
         Initialize the model configurations and parameters.
         In the model, the network structure is like [D_in, H1, H, H1, D_out], and D_in equals to D_out.
@@ -22,19 +22,21 @@ class AutoEncoder(torch.nn.Module):
         :param da: the dimension of the attention model
         """
         super(AutoEncoder, self).__init__()
+        T.set_device(device)
         self.H1 = H[0]
         self.H = H[1]
         self.dropout_rate = dropout_rate
+        self.device = device
         if torch.cuda.is_available():
-            self.linear1 = torch.nn.Linear(D_in, self.H1, bias=False).cuda()
-            self.linear2 = torch.nn.Linear(self.H1, self.H).cuda()
-            self.linear3 = torch.nn.Linear(self.H, self.H1).cuda()
-            self.linear4 = torch.nn.Linear(self.H1, D_out).cuda()
+            self.linear1 = torch.nn.Linear(D_in, self.H1, bias=False).to(device)
+            self.linear2 = torch.nn.Linear(self.H1, self.H).to(device)
+            self.linear3 = torch.nn.Linear(self.H, self.H1).to(device)
+            self.linear4 = torch.nn.Linear(self.H1, D_out).to(device)
             self.attention_matrix1 = Variable(torch.zeros(da, self.H1).type(T.FloatTensor), requires_grad=True)
             # self.attention_matrix2 = Variable(torch.zeros(20, 30).type(T.FloatTensor), requires_grad=True)
             self.attention_matrix1 = torch.nn.init.xavier_uniform_(self.attention_matrix1)
             # self.attention_matrix2 = torch.nn.init.xavier_uniform(self.attention_matrix2)
-            self.self_attention = torch.nn.Linear(da, 1).cuda()
+            self.self_attention = torch.nn.Linear(da, 1).to(device)
         else:
             self.linear1 = torch.nn.Linear(D_in, self.H1, bias=False)
             self.linear2 = torch.nn.Linear(self.H1, self.H)
@@ -57,7 +59,7 @@ class AutoEncoder(torch.nn.Module):
         # Compute the neighbor inner products
         inner_product = item_vector.t().mm(self.linear4.weight.t())
         item_corr = Variable(
-            torch.from_numpy(place_correlation[batch_item_index[0]].toarray()).type(T.FloatTensor))
+            torch.from_numpy(place_correlation[batch_item_index[0]].toarray()).type(T.FloatTensor)).to(self.device)
         inner_product = inner_product * item_corr
         neighbor_product = inner_product.sum(dim=0).unsqueeze(0)
 
